@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="tl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Bias · CISD · FVG Scanner</title>
+<style>
+:root{--bg:#0f1519;--pan:#172028;--line:#27333d;--tx:#e7edf2;--mut:#8896a3;--bull:#35c3a4;--bear:#ee7770;--warn:#e6b84c}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:14px;max-width:720px;margin-inline:auto}
+h1{font-size:19px;margin:4px 0 2px;letter-spacing:.2px}
+.sub{color:var(--mut);font-size:13px;margin:0 0 12px}
+.bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+button{background:var(--tx);color:var(--bg);border:0;border-radius:8px;padding:10px 16px;font:600 14px inherit;font-family:inherit}
+button:disabled{opacity:.5}
+label{color:var(--mut);font-size:13px;display:flex;gap:6px;align-items:center}
+#st{color:var(--mut);font-size:13px;margin:4px 0 12px}
+.card{background:var(--pan);border:1px solid var(--line);border-left:4px solid var(--mut);border-radius:10px;padding:12px;margin-bottom:10px}
+.card.bull{border-left-color:var(--bull)}.card.bear{border-left-color:var(--bear)}
+.top{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.sym{font-weight:700;font-size:16px}
+.tag{font-size:12px;font-weight:700;padding:2px 8px;border-radius:99px}
+.bull .tag{background:rgba(53,195,164,.16);color:var(--bull)}
+.bear .tag{background:rgba(238,119,112,.16);color:var(--bear)}
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}
+.chip{font-size:12px;padding:3px 8px;border-radius:6px;border:1px solid var(--line);color:var(--mut)}
+.chip.on{color:var(--tx);border-color:var(--tx)}
+.row{font-size:13px;color:var(--mut);margin-top:4px}
+.row b{color:var(--tx);font-weight:600}
+.go{color:var(--warn);font-weight:700;font-size:13px}
+.empty{color:var(--mut);padding:18px 0;text-align:center}
+</style>
+</head>
+<body>
+<h1>Bias · CISD · FVG Scanner</h1>
+<p class="sub">Weekly + Daily bias → 1H CISD → RGR/GRG sa loob ng FVG (15m o 5m). Top 50 Binance USDT by volume.</p>
+<div class="bar">
+  <button id="go">Scan na</button>
+  <label><input type="checkbox" id="auto"> Auto-scan kada 5 min</label>
+  <label><input type="checkbox" id="onlyv"> Valid entry lang</label>
+</div>
+<div id="st">Pindutin ang Scan na.</div>
+<div id="out"></div>
+
+<script>
+const API='https://api.binance.com/api/v3';
+const SKIP=/^(USDC|FDUSD|TUSD|USDP|DAI|BUSD|USDE|EUR|AEUR|XUSD|USD1|PAXG)USDT$|UPUSDT$|DOWNUSDT$/;
+const $=s=>document.querySelector(s);
+let results=[],timer=null,busy=false;
+
+async function j(u){const r=await fetch(u);if(!r.ok)throw new Error(r.status);return r.json()}
+async function kl(s,i,n){
+  const d=await j(`${API}/klines?symbol=${s}&interval=${i}&limit=${n}`);
+  d.pop(); // tanggalin ang candle na hindi pa closed
+  return d.map(k=>({o:+k[1],h:+k[2],l:+k[3],c:+k[4]}));
+}
+const fmt=p=>p<1?p.toPrecision(4):p.toFixed(p<100?3:2);
+
+// 1 = bullish, -1 = bearish, 0 = walang bias
+function bias(c){
+  const a=c[c.length-1],b=c[c.length-2];
+  return a.c>b.h?1:a.c<b.l?-1:0;
+}
+
+// CISD: level = open ng last green (bull) / red (bear) candle bago ang final down/up-leg
+function cisd(c,dir){
+  const opp=x=>dir===1?x.c<x.o:x.c>x.o;
+  const same=x=>dir===1?x.c>x.o:x.c<x.o;
+  let e=-1;
+  for(let i=c.length-1;i>=1;i--){if(opp(c[i])&&opp(c[i-1])){e=i;break}}
+  if(e<0)return null;
+  let s=e;while(s>0&&opp(c[s-1]))s--;
+  let g=s-1;while(g>=0&&!same(c[g]))g--;
+  if(g<0)return null;
+  const lvl=c[g].o,last=c[c.length-1];
+  const ok=e<c.length-1&&last.c*dir>lvl*dir&&c.slice(e+1).some(x=>x.c*dir>lvl*dir);
+  return{lvl,ok};
+}
+
+function fvgs(c,dir){
+  const z=[];
+  for(let i=2;i<c.length;i++){
+    const a=c[i-2],k=c[i];
+    if(dir===1&&a.h<k.l)z.push({i,lo:a.h,hi:k.l});
+    if(dir===-1&&a.l>k.h)z.push({i,lo:k.h,hi:a.l});
+  }
+  return z;
+}
+
+// RGR (bull) / GRG (bear) na nag-form sa loob ng FVG ng parehong timeframe
+function pattern(c,dir){
+  const z=fvgs(c,dir),col=x=>x.c>=x.o?1:-1;
+  for(let t=c.length-3;t>=Math.max(2,c.length-8);t--){
+    const p=[c[t],c[t+1],c[t+2]];
+    if(col(p[0])!==-dir||col(p[1])!==dir||col(p[2])!==-dir)continue;
+    const lo=Math.min(...p.map(x=>x.l)),hi=Math.max(...p.map(x=>x.h));
+    const f=z.filter(q=>q.i<t&&lo<=q.hi&&hi>=q.lo).pop();
+    if(!f)continue;
+    const entry=p[2].c,sl=dir===1?lo:hi,risk=Math.abs(entry-sl);
+    if(!risk)continue;
+    return{zone:f,entry,sl,tp:entry+dir*risk*2,age:c.length-1-(t+2)};
+  }
+  return null;
+}
+
+async function scan(t){
+  const sym=t.symbol;
+  const [w,d]=await Promise.all([kl(sym,'1w',4),kl(sym,'1d',4)]);
+  const bw=bias(w),bd=bias(d),dir=bw===bd?bw:0;
+  const r={sym,dir,price:+t.lastPrice,cisd:null,pat:null,watch:null};
+  if(!dir)return r;
+  const h=await kl(sym,'1h',100);
+  r.cisd=cisd(h,dir);
+  if(!(r.cisd&&r.cisd.ok))return r;
+  const [m15,m5]=await Promise.all([kl(sym,'15m',100),kl(sym,'5m',100)]);
+  for(const [tf,c] of [['15m',m15],['5m',m5]]){
+    const p=pattern(c,dir);
+    if(p){r.pat={...p,tf};break}
+  }
+  if(!r.pat){const z=fvgs(m15,dir).pop();if(z)r.watch=z}
+  return r;
+}
+
+function stage(r){return !r.dir?0:r.pat?3:(r.cisd&&r.cisd.ok)?2:1}
+
+function render(){
+  const only=$('#onlyv').checked;
+  const list=results.filter(r=>r.dir&&(!only||r.pat)).sort((a,b)=>stage(b)-stage(a));
+  if(!list.length){$('#out').innerHTML='<div class="empty">Walang setup na pasok sa filter ngayon.</div>';return}
+  $('#out').innerHTML=list.map(r=>{
+    const s=stage(r),cls=r.dir===1?'bull':'bear',side=r.dir===1?'Bullish':'Bearish',pn=r.dir===1?'RGR':'GRG';
+    let rows='';
+    if(r.pat){
+      rows=`<div class="go">ENTRY: ${r.dir===1?'Long':'Short'} · ${r.pat.tf} ${pn} sa FVG (${r.pat.age} candle ang nakalipas)</div>
+      <div class="row">Entry <b>${fmt(r.pat.entry)}</b> · SL <b>${fmt(r.pat.sl)}</b> · TP 1:2 <b>${fmt(r.pat.tp)}</b></div>
+      <div class="row">FVG zone: ${fmt(r.pat.zone.lo)} – ${fmt(r.pat.zone.hi)}</div>`;
+    }else if(s===2){
+      rows=`<div class="row">Hintayin ang ${pn} sa FVG ng 15m o 5m.</div>`+
+        (r.watch?`<div class="row">Bantayan ang 15m FVG: <b>${fmt(r.watch.lo)} – ${fmt(r.watch.hi)}</b></div>`:'');
+    }else{
+      const need=r.cisd?r.cisd.lvl:null;
+      rows=`<div class="row">Hintayin ang 1H CISD${need?`: close ${r.dir===1?'above':'below'} <b>${fmt(need)}</b>`:''}.</div>`;
+    }
+    return `<div class="card ${cls}">
+      <div class="top"><span class="sym">${r.sym.replace('USDT','')}<span style="color:var(--mut);font-weight:400">/USDT</span></span><span class="tag">${side}</span></div>
+      <div class="chips"><span class="chip on">Bias W+D</span><span class="chip ${s>=2?'on':''}">1H CISD</span><span class="chip ${s>=3?'on':''}">${pn} sa FVG</span></div>
+      ${rows}<div class="row">Presyo ngayon: ${fmt(r.price)}</div></div>`;
+  }).join('');
+}
+
+async function run(){
+  if(busy)return;busy=true;$('#go').disabled=true;results=[];
+  try{
+    $('#st').textContent='Kinukuha ang top 50 by volume…';
+    const all=await j(`${API}/ticker/24hr`);
+    const top=all.filter(t=>t.symbol.endsWith('USDT')&&!SKIP.test(t.symbol))
+      .sort((a,b)=>b.quoteVolume-a.quoteVolume).slice(0,50);
+    let i=0,done=0,fail=0;
+    const worker=async()=>{
+      while(i<top.length){
+        const t=top[i++];
+        try{results.push(await scan(t))}catch(e){fail++}
+        done++;$('#st').textContent=`Nag-scan… ${done}/${top.length}`;
+      }
+    };
+    await Promise.all(Array.from({length:5},worker));
+    const v=results.filter(r=>r.pat).length,b=results.filter(r=>r.dir).length;
+    $('#st').textContent=`Tapos: ${b} may aligned na bias, ${v} valid entry.${fail?` (${fail} na-skip dahil sa error)`:''} · ${new Date().toLocaleTimeString()}`;
+    render();
+  }catch(e){
+    $('#st').textContent='Hindi maabot ang Binance API. Subukan ulit o i-check ang connection.';
+  }
+  busy=false;$('#go').disabled=false;
+}
+
+$('#go').onclick=run;
+$('#onlyv').onchange=render;
+$('#auto').onchange=e=>{clearInterval(timer);if(e.target.checked){run();timer=setInterval(run,300000)}};
+</script>
+</body>
+</html>
