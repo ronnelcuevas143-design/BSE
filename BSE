@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="tl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Bias · CISD · FVG Scanner</title>
+<style>
+:root{--bg:#0f1519;--pan:#172028;--line:#27333d;--tx:#e7edf2;--mut:#8896a3;--bull:#35c3a4;--bear:#ee7770;--warn:#e6b84c}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:14px;max-width:720px;margin-inline:auto}
+h1{font-size:19px;margin:4px 0 2px;letter-spacing:.2px}
+.sub{color:var(--mut);font-size:13px;margin:0 0 12px}
+.bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+button{background:var(--tx);color:var(--bg);border:0;border-radius:8px;padding:10px 16px;font:600 14px inherit;font-family:inherit}
+button:disabled{opacity:.5}
+label{color:var(--mut);font-size:13px;display:flex;gap:6px;align-items:center}
+#st{color:var(--mut);font-size:13px;margin:4px 0 12px}
+.card{background:var(--pan);border:1px solid var(--line);border-left:4px solid var(--mut);border-radius:10px;padding:12px;margin-bottom:10px}
+.card.bull{border-left-color:var(--bull)}.card.bear{border-left-color:var(--bear)}
+.top{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.sym{font-weight:700;font-size:16px}
+.tag{font-size:12px;font-weight:700;padding:2px 8px;border-radius:99px}
+.bull .tag{background:rgba(53,195,164,.16);color:var(--bull)}
+.bear .tag{background:rgba(238,119,112,.16);color:var(--bear)}
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}
+.chip{font-size:12px;padding:3px 8px;border-radius:6px;border:1px solid var(--line);color:var(--mut)}
+.chip.on{color:var(--tx);border-color:var(--tx)}
+.row{font-size:13px;color:var(--mut);margin-top:4px}
+.row b{color:var(--tx);font-weight:600}
+.go{color:var(--warn);font-weight:700;font-size:13px}
+.empty{color:var(--mut);padding:18px 0;text-align:center}
+</style>
+</head>
+<body>
+<h1>Bias · CISD · FVG Scanner</h1>
+<p class="sub">Weekly + Daily bias → 1H CISD → RGR/GRG sa loob ng FVG (15m o 5m). Top 50 Binance USDT by volume.</p>
+<div class="bar">
+  <button id="go">Scan na</button>
+  <label><input type="checkbox" id="auto"> Auto-scan kada 5 min</label>
