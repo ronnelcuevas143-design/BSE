@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="tl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Bias · CISD · FVG Scanner</title>
+<style>
+:root{--bg:#0f1519;--pan:#172028;--line:#27333d;--tx:#e7edf2;--mut:#8896a3;--bull:#35c3a4;--bear:#ee7770;--warn:#e6b84c}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:14px;max-width:720px;margin-inline:auto}
+h1{font-size:19px;margin:4px 0 2px;letter-spacing:.2px}
+.sub{color:var(--mut);font-size:13px;margin:0 0 12px}
+.bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+button{background:var(--tx);color:var(--bg);border:0;border-radius:8px;padding:10px 16px;font:600 14px inherit;font-family:inherit}
+button:disabled{opacity:.5}
+button.sm{background:none;color:var(--mut);border:1px solid var(--line);padding:4px 10px;font-size:12px;font-weight:600;margin-left:8px}
+label{color:var(--mut);font-size:13px;display:flex;gap:6px;align-items:center}
+#st{color:var(--mut);font-size:13px;margin:4px 0 12px}
+.sec{font-weight:700;font-size:14px;margin:16px 0 8px}
+.card{background:var(--pan);border:1px solid var(--line);border-left:4px solid var(--mut);border-radius:10px;padding:12px;margin-bottom:10px}
+.card.bull{border-left-color:var(--bull)}.card.bear{border-left-color:var(--bear)}
+.top{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.sym{font-weight:700;font-size:16px}
+.tag{font-size:12px;font-weight:700;padding:2px 8px;border-radius:99px}
+.bull .tag{background:rgba(53,195,164,.16);color:var(--bull)}
+.bear .tag{background:rgba(238,119,112,.16);color:var(--bear)}
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}
+.chip{font-size:12px;padding:3px 8px;border-radius:6px;border:1px solid var(--line);color:var(--mut)}
+.chip.on{color:var(--tx);border-color:var(--tx)}
+.row{font-size:13px;color:var(--mut);margin-top:4px}
+.row b{color:var(--tx);font-weight:600}
+.go{color:var(--warn);font-weight:700;font-size:13px;margin-top:6px}
+.lnk{display:inline-block;margin-top:8px;color:var(--tx);font-size:13px;font-weight:600;border:1px solid var(--line);border-radius:8px;padding:6px 10px;text-decoration:none;background:none;font-family:inherit;cursor:pointer}
+.empty{color:var(--mut);padding:18px 0;text-align:center}
+</style>
+</head>
+<body>
+<h1>Bias · CISD · FVG Scanner</h1>
+<p class="sub" id="sub">Weekly + Daily bias → 1H CISD → RGR/GRG sa loob ng FVG (15m o 5m). Top 200 by volume.</p>
+<div class="bar">
+  <button id="go">Scan na</button>
+  <label><input type="checkbox" id="auto"> Auto-scan kada 5 min</label>
+  <label><input type="checkbox" id="onlyv"> Itago ang naghihintay pa</label>
+</div>
+<div id="st">Pindutin ang Scan na.</div>
+<div id="act"></div>
+<div id="out"></div>
+<div id="done"></div>
+
+<script>
+const MX='https://contract.mexc.com/api/v1/contract';
+const BN='https://api.binance.com/api/v3';
+const SKIP=/^(USDC|FDUSD|TUSD|USDP|DAI|BUSD|USDE|EUR|AEUR|XUSD|USD1|PAXG)USDT$|UPUSDT$|DOWNUSDT$/;
+const IV={'1w':['Week1',604800],'1d':['Day1',86400],'1h':['Min60',3600],'15m':['Min15',900],'5m':['Min5',300]};
+const TOP=200,LSK='scanner_v1';
+const $=s=>document.querySelector(s);
+let results=[],timer=null,busy=false,SRC='mexc',nextAt=0;
+
+/* ---------- storage: nananatili ang setup kahit i-refresh ---------- */
+function load(){
+  try{const s=JSON.parse(localStorage.getItem(LSK));return{open:s.open||[],done:s.done||[],seen:s.seen||[]}}
+  catch(e){return{open:[],done:[],seen:[]}}
+}
+function save(S){
+  try{S.done=S.done.slice(0,30);S.seen=S.seen.slice(-300);localStorage.setItem(LSK,JSON.stringify(S))}catch(e){}
+}
+
+/* ---------- network ---------- */
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+async function gate(){ // iwas rate limit: ~9 request/segundo
+  const now=Date.now(),w=Math.max(0,nextAt-now);
+  nextAt=Math.max(now,nextAt)+110;
+  if(w)await sleep(w);
+}
+async function j(u,n=3){
+  await gate();
+  const r=await fetch(u);
+  if(r.status===429&&n>0){await sleep(1500);return j(u,n-1)}
+  if(!r.ok)throw new Error(r.status);
+  return r.json();
+}
+const mapMx=d=>d.time.map((t,k)=>({t,o:+d.open[k],h:+d.high[k],l:+d.low[k],c:+d.close[k]}));
+const mapBn=d=>d.map(k=>({t:Math.floor(k[0]/1000),o:+k[1],h:+k[2],l:+k[3],c:+k[4]}));
+// closed candles lang (tinatanggal ang kasalukuyang candle)
+async function kl(s,i,n){
+  let c;
+  if(SRC==='mexc'){
+    const [iv,sec]=IV[i],end=Math.floor(Date.now()/1000);
+    c=mapMx((await j(`${MX}/kline/${s}?interval=${iv}&start=${end-sec*(n+2)}&end=${end}`)).data);
+  }else c=mapBn(await j(`${BN}/klines?symbol=${s}&interval=${i}&limit=${n}`));
+  c.pop();return c;
+}
+// lahat ng 5m candle mula sa entry hanggang ngayon (kasama ang kasalukuyan)
+async function klSince(tr,start){
+  if(tr.src==='mexc'){
+    const end=Math.floor(Date.now()/1000);
+    return mapMx((await j(`${MX}/kline/${tr.api}?interval=Min5&start=${start}&end=${end}`)).data);
+  }
+  return mapBn(await j(`${BN}/klines?symbol=${tr.api}&interval=5m&startTime=${start*1000}&limit=1000`));
+}
+
+const fmt=p=>p<1?p.toPrecision(4):p.toFixed(p<100?3:2);
+const hm=t=>new Date(t*1000).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});
+const dt=t=>new Date(t*1000).toLocaleString([],{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
+
+/* ---------- logic ---------- */
+function bias(c){
+  const a=c[c.length-1],b=c[c.length-2];
+  return a.c>b.h?1:a.c<b.l?-1:0;
+}
+function cisd(c,dir){
+  const opp=x=>dir===1?x.c<x.o:x.c>x.o;
+  const same=x=>dir===1?x.c>x.o:x.c<x.o;
+  let e=-1;
+  for(let i=c.length-1;i>=1;i--){if(opp(c[i])&&opp(c[i-1])){e=i;break}}
+  if(e<0)return null;
+  let s=e;while(s>0&&opp(c[s-1]))s--;
+  let g=s-1;while(g>=0&&!same(c[g]))g--;
+  if(g<0)return null;
+  const lvl=c[g].o,last=c[c.length-1];
+  const ok=e<c.length-1&&last.c*dir>lvl*dir&&c.slice(e+1).some(x=>x.c*dir>lvl*dir);
+  return{lvl,ok};
+}
+function fvgs(c,dir){
+  const z=[];
+  for(let i=2;i<c.length;i++){
+    const a=c[i-2],k=c[i],t=c[i-1].t;
+    if(dir===1&&a.h<k.l)z.push({i,t,lo:a.h,hi:k.l});
+    if(dir===-1&&a.l>k.h)z.push({i,t,lo:k.h,hi:a.l});
+  }
+  return z;
+}
+function pattern(c,dir){
+  const z=fvgs(c,dir),col=x=>x.c>=x.o?1:-1;
+  for(let t=c.length-3;t>=Math.max(2,c.length-8);t--){
+    const p=[c[t],c[t+1],c[t+2]];
+    if(col(p[0])!==-dir||col(p[1])!==dir||col(p[2])!==-dir)continue;
+    const lo=Math.min(...p.map(x=>x.l)),hi=Math.max(...p.map(x=>x.h));
+    const f=z.filter(q=>q.i<t&&lo<=q.hi&&hi>=q.lo).pop();
+    if(!f)continue;
+    const entry=p[2].c,sl=dir===1?lo:hi,risk=Math.abs(entry-sl);
+    if(!risk)continue;
+    return{zone:f,entry,sl,tp:entry+dir*risk*2,age:c.length-1-(t+2),times:p.map(x=>x.t)};
+  }
+  return null;
+}
+async function scan(t){
+  const d=await kl(t.api,'1d',4),bd=bias(d);
+  const r={t,dir:0,price:t.lastPrice,cisd:null,pat:null,watch:null};
+  if(!bd)return r;
+  const w=await kl(t.api,'1w',4);
+  if(bias(w)!==bd)return r;
+  const dir=r.dir=bd;
+  const h=await kl(t.api,'1h',100);
+  r.cisd=cisd(h,dir);
+  if(!(r.cisd&&r.cisd.ok))return r;
+  const [m15,m5]=await Promise.all([kl(t.api,'15m',100),kl(t.api,'5m',100)]);
+  for(const [tf,c] of [['15m',m15],['5m',m5]]){
+    const p=pattern(c,dir);
+    if(p){r.pat={...p,tf};break}
+  }
+  if(!r.pat){const z=fvgs(m15,dir).pop();if(z)r.watch=z}
+  return r;
+}
+const stage=r=>!r.dir?0:r.pat?3:(r.cisd&&r.cisd.ok)?2:1;
+
+/* ---------- tracking: hanggang TP o SL ---------- */
+async function resolve(tr){
+  const c=await klSince(tr,tr.entryT);
+  if(c.length)tr.last=c[c.length-1].c;
+  for(const x of c){
+    if(x.t<tr.entryT)continue;
+    const sl=tr.dir===1?x.l<=tr.sl:x.h>=tr.sl;
+    const tp=tr.dir===1?x.h>=tr.tp:x.l<=tr.tp;
+    if(sl||tp){tr.res=sl?'SL':'TP';tr.both=sl&&tp;tr.endT=x.t;break}
+  }
+}
+async function track(){
+  const S=load(),known=new Set([...S.open,...S.done].map(x=>x.key).concat(S.seen));
+  for(const r of results){
+    if(!r.pat)continue;
+    const p=r.pat,key=`${r.t.api}|${r.dir}|${p.tf}|${p.times[2]}`;
+    if(known.has(key))continue;
+    const tr={key,src:SRC,api:r.t.api,base:r.t.base,tv:r.t.tv,dir:r.dir,tf:p.tf,entry:p.entry,sl:p.sl,tp:p.tp,
+      times:p.times,zone:p.zone,entryT:p.times[2]+(p.tf==='5m'?300:900),found:Date.now()};
+    try{await resolve(tr)}catch(e){}
+    if(tr.res)S.seen.push(key);else S.open.push(tr); // kung tapos na pagkakita, hindi na isasama
+  }
+  save(S);
+}
+async function checkTrades(){
+  const S=load();
+  for(const tr of S.open.slice()){
+    try{await resolve(tr)}catch(e){continue}
+    if(tr.res){S.open=S.open.filter(x=>x.key!==tr.key);S.done.unshift(tr)}
+  }
+  save(S);renderActive();
+}
+function del(key){const S=load();S.open=S.open.filter(x=>x.key!==key);S.seen.push(key);save(S);renderActive()}
+function clr(){const S=load();S.done=[];save(S);renderActive()}
+
+/* ---------- render ---------- */
+const tvLink=(tv,iv)=>`https://www.tradingview.com/chart/?symbol=${encodeURIComponent(tv)}&interval=${iv}`;
+function renderActive(){
+  const S=load();
+  $('#act').innerHTML=S.open.length?`<div class="sec">Active na setup (${S.open.length})</div>`+S.open.map(tr=>{
+    const pn=tr.dir===1?'RGR':'GRG';
+    return `<div class="card ${tr.dir===1?'bull':'bear'}">
+      <div class="top"><span class="sym">${tr.base}<span style="color:var(--mut);font-weight:400">/USDT</span></span><span class="tag">${tr.dir===1?'Long':'Short'}</span></div>
+      <div class="go">${tr.tf} ${pn} sa FVG · hinihintay ang TP o SL</div>
+      <div class="row">Entry <b>${fmt(tr.entry)}</b> · SL <b>${fmt(tr.sl)}</b> · TP 1:2 <b>${fmt(tr.tp)}</b></div>
+      <div class="row">Pattern (oras ng candle open): <b>${tr.times.map(hm).join(' → ')}</b></div>
+      <div class="row">FVG ${tr.tf}: ${fmt(tr.zone.lo)} – ${fmt(tr.zone.hi)} · nabuo ${hm(tr.zone.t)}</div>
+      <div class="row">Presyo ngayon: ${tr.last?fmt(tr.last):'—'}</div>
+      <a class="lnk" href="${tvLink(tr.tv,tr.tf==='5m'?5:15)}" target="_blank" rel="noopener">Buksan sa TradingView</a>
+      <button class="lnk" onclick="del('${tr.key}')">Alisin</button></div>`;
+  }).join(''):'';
+  $('#done').innerHTML=S.done.length?`<div class="sec">Tapos na<button class="sm" onclick="clr()">Burahin lahat</button></div>`+S.done.map(tr=>
+    `<div class="card ${tr.dir===1?'bull':'bear'}">
+      <div class="top"><span class="sym">${tr.base}<span style="color:var(--mut);font-weight:400">/USDT</span></span><span class="tag">${tr.res==='TP'?'TP na':'SL na'}</span></div>
+      <div class="row">${tr.dir===1?'Long':'Short'} · Entry <b>${fmt(tr.entry)}</b> · SL <b>${fmt(tr.sl)}</b> · TP <b>${fmt(tr.tp)}</b></div>
+      <div class="row">Natamaan: ${dt(tr.endT)}${tr.both?' (SL at TP sa iisang candle, SL ang binilang)':''}</div></div>`).join(''):'';
+}
+function render(){
+  const list=$('#onlyv').checked?[]:results.filter(r=>r.dir&&!r.pat).sort((a,b)=>stage(b)-stage(a));
+  if(!list.length){$('#out').innerHTML='';return}
+  $('#out').innerHTML=`<div class="sec">Naghihintay pa (${list.length})</div>`+list.map(r=>{
+    const s=stage(r),pn=r.dir===1?'RGR':'GRG';
+    let row;
+    if(s===2){
+      row=`<div class="row">Hintayin ang ${pn} sa FVG ng 15m o 5m.</div>`+
+        (r.watch?`<div class="row">Bantayan ang 15m FVG: <b>${fmt(r.watch.lo)} – ${fmt(r.watch.hi)}</b></div>`:'');
+    }else row=`<div class="row">Hintayin ang 1H CISD${r.cisd?`: close ${r.dir===1?'above':'below'} <b>${fmt(r.cisd.lvl)}</b>`:''}.</div>`;
+    return `<div class="card ${r.dir===1?'bull':'bear'}">
+      <div class="top"><span class="sym">${r.t.base}<span style="color:var(--mut);font-weight:400">/USDT</span></span><span class="tag">${r.dir===1?'Bullish':'Bearish'}</span></div>
+      <div class="chips"><span class="chip on">Bias W+D</span><span class="chip ${s>=2?'on':''}">1H CISD</span><span class="chip">${pn} sa FVG</span></div>
+      ${row}<div class="row">Presyo ngayon: ${fmt(r.price)}</div>
+      <a class="lnk" href="${tvLink(r.t.tv,15)}" target="_blank" rel="noopener">Buksan sa TradingView</a></div>`;
+  }).join('');
+}
+
+/* ---------- run ---------- */
+async function getTop(){
+  try{
+    const d=(await j(`${MX}/ticker`)).data;
+    const top=d.filter(x=>x.symbol.endsWith('_USDT')&&!SKIP.test(x.symbol.replace('_','')))
+      .sort((a,b)=>b.amount24-a.amount24).slice(0,TOP)
+      .map(x=>({api:x.symbol,base:x.symbol.replace('_USDT',''),lastPrice:+x.lastPrice,tv:'MEXC:'+x.symbol.replace('_','')+'.P'}));
+    if(top.length<10)throw new Error('kulang');
+    SRC='mexc';return top;
+  }catch(e){
+    SRC='binance';
+    const all=await j(`${BN}/ticker/24hr`);
+    return all.filter(x=>x.symbol.endsWith('USDT')&&!SKIP.test(x.symbol))
+      .sort((a,b)=>b.quoteVolume-a.quoteVolume).slice(0,TOP)
+      .map(x=>({api:x.symbol,base:x.symbol.replace('USDT',''),lastPrice:+x.lastPrice,tv:'BINANCE:'+x.symbol}));
+  }
+}
+async function run(){
+  if(busy)return;busy=true;$('#go').disabled=true;results=[];
+  try{
+    $('#st').textContent=`Kinukuha ang top ${TOP} by volume…`;
+    const top=await getTop();
+    $('#sub').textContent=`Weekly + Daily bias → 1H CISD → RGR/GRG sa loob ng FVG (15m o 5m). Top ${top.length} · ${SRC==='mexc'?'MEXC perpetual':'Binance spot (hindi maabot ang MEXC)'}.`;
+    let i=0,done=0,fail=0;
+    const worker=async()=>{
+      while(i<top.length){
+        const t=top[i++];
+        try{results.push(await scan(t))}catch(e){fail++}
+        done++;$('#st').textContent=`Nag-scan… ${done}/${top.length}`;
+      }
+    };
+    await Promise.all(Array.from({length:4},worker));
+    await track();await checkTrades();render();
+    const v=results.filter(r=>r.pat).length,b=results.filter(r=>r.dir).length;
+    $('#st').textContent=`Tapos: ${b} may aligned na bias, ${v} may entry ngayon.${fail?` (${fail} na-skip dahil sa error)`:''} · ${new Date().toLocaleTimeString()}`;
+  }catch(e){
+    $('#st').textContent='Hindi maabot ang MEXC at Binance. Subukan ulit o i-check ang connection.';
+  }
+  busy=false;$('#go').disabled=false;
+}
+$('#go').onclick=run;
+$('#onlyv').onchange=render;
+$('#auto').onchange=e=>{clearInterval(timer);if(e.target.checked){run();timer=setInterval(run,300000)}};
+
+// pagbukas: ipakita agad ang naka-save na setup at i-check kung na-TP/SL na
+renderActive();
+checkTrades();
+setInterval(()=>{if(!busy)checkTrades()},60000);
+</script>
+</body>
+</html>
